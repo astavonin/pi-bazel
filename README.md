@@ -4,6 +4,58 @@ Bazel cross-compilation from an x86_64 Linux host to a Raspberry Pi 5, for netwo
 
 The goal is a **stable, predictable, reproducible** build: the compiler and all pure-source dependencies are hermetic, and the small set of device-coupled system libraries comes from a pinned, checksummed sysroot rather than from whatever happens to be installed on the build machine.
 
+## Build and test
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) on `PATH`; it reads `.bazelversion` and fetches Bazel 9.2.0 itself. Nothing else needs installing — the compiler, its runtime libraries and the sysroot are all fetched and checksummed by the build.
+
+```sh
+# Host: build and run the unit tests on x86_64.
+bazel test --config=host //...
+
+# Cross: build the aarch64 binary.
+bazel build --config=pi //src/hello
+file bazel-bin/src/hello/hello        # ELF 64-bit LSB pie executable, ARM aarch64
+
+# Device: deploy to the Pi over ssh, run it, and check the result.
+bazel test --config=pi //...
+```
+
+The device test needs the Pi reachable as the ssh alias `pi` with key-based auth. Point it elsewhere with `--test_env=PI_SSH_HOST=<host>`. A Bazel test cannot read `~/.ssh/config` by default, so `.bazelrc` forwards `HOME` and `SSH_AUTH_SOCK` explicitly under `--config=pi`.
+
+`--config=ci` composes with either and adds network isolation plus strict dependency checking:
+
+```sh
+bazel build --config=ci --config=host //...
+```
+
+### What runs where
+
+`bazel test //...` is correct under both configurations — targets that do not belong to the selected platform are skipped rather than failing:
+
+```
+bazel test --config=host //...    hello_test PASSED · device_smoke SKIPPED
+bazel test --config=pi //...      device_smoke PASSED · hello_test SKIPPED
+```
+
+Naming a target that does not belong to the current platform is an error rather than a silent skip:
+
+```
+$ bazel test --config=pi //src/hello:hello_test
+ERROR: Target //src/hello:hello_test is incompatible and cannot be built, but was explicitly requested.
+```
+
+The device test reports three distinguishable failures, because an unreachable Pi, a bad artifact, and a broken test harness call for different responses. The label is the first line of output:
+
+```
+DEVICE-UNREACHABLE: ssh to 'pi' failed          # exit 2 — the toolchain is not implicated
+SMOKE-FAILED: c++ runtime present: ...          # exit 1 — the device answered, the artifact was wrong
+HARNESS-FAILED: could not resolve ... via rlocation  # exit 3 — a build-graph fault, neither device nor artifact
+```
+
+### First build
+
+The first build fetches two LLVM distributions — the x86_64 host toolchain and an aarch64 one used only as a library donor — plus ICU and a sysroot. Budget roughly **3.8 GB of downloads and around 62 GB in `~/.cache/bazel`** (LLVM X64 1.9 GB + ARM64 1.8 GB + ICU + sysroot; the cache is larger than the download total because it also holds extracted trees and build outputs), and a correspondingly slow first run. Subsequent builds hit the repository cache.
+
 ## Target
 
 | Property | Value |
@@ -58,7 +110,7 @@ The C++ runtime is **statically linked libc++ 23**, not the sysroot's libstdc++.
 
 C++26 is deferred: reflection and contracts are currently GCC-16-mainline-only and Clang has neither. The toolchain is registered per-platform in Bazel, so swapping or adding one later is not a rewrite.
 
-Binaries are compiled against glibc 2.28-era headers and run on the Pi's 2.41 — glibc is forward-compatible in that direction.
+Binaries are compiled against the pinned interim sysroot's glibc 2.24 headers and run on the Pi's 2.41 — glibc is forward-compatible in that direction. `M02`'s Debian trixie sysroot raises this floor.
 
 ## Media stack
 
@@ -81,8 +133,8 @@ MODULE.bazel.lock     resolved dependency lock  │ Bazel requires
 bazel/                build machinery
 ├── platforms/        host and //bazel/platforms:pi5 definitions
 ├── toolchains/       LLVM toolchain registration, sysroot wiring
-├── sysroot/          mmdebstrap-based sysroot builder and package pins
-└── deploy/           rsync + ssh deploy and on-device test runner
+├── sysroot/          mmdebstrap-based sysroot builder and package pins (M02, not yet created)
+└── deploy/           scp + ssh deploy and on-device test runner
 
 third_party/          BUILD files for sysroot-provided C libraries
 src/                  application code
@@ -93,14 +145,14 @@ Build machinery lives under a single `bazel/` folder rather than scattered acros
 
 ## Status
 
-**Planning — nothing is implemented yet.** The repository currently holds this README and a `.gitignore`; every path in the layout above is still to be created.
+**M00 workspace bootstrap and hermetic cross toolchain — done.** `bazel test --config=host //...` and `bazel test --config=pi //...` are both green, including an `sh_test` that deploys and runs the cross-built binary on the device over ssh.
 
 Settled so far:
 
 - Bazel 9.2.0 via bazelisk, Clang 23.1.0, statically linked libc++ 23 at `-std=c++23`
-- `toolchains_llvm` v1.9.0 pinned to LLVM 23.1.0, with a Debian-snapshot sysroot for C libraries only
+- `toolchains_llvm` v1.9.0 pinned to LLVM 23.1.0, with an interim Chromium sysroot for C libraries only (`M02` replaces it with the Debian trixie snapshot)
 - GStreamer for the media layer, with libcamera reached through `libcamerasrc` rather than linked
 
-Known blocker: `ld.lld` from the LLVM 23.1.0 release binaries needs `libicui18n.so.70`, which Ubuntu 24.04 does not ship (it has ICU 74), so every link action fails on that host until the toolchain is given an ICU 70 to load.
+`ld.lld` from the LLVM 23.1.0 release binaries needs `libicui18n.so.70`, which Ubuntu 24.04 does not ship (it has ICU 74). Resolved: `bazel/toolchains/llvm_distribution.bzl` fetches the official LLVM tarball and the upstream ICU 70 tarball, merges the three ICU shared objects into the LLVM tree's `lib/` (where `ld.lld`'s own `RUNPATH` finds them), and self-checks `ld.lld --version` at fetch time.
 
-Next: the Bazel workspace itself — `MODULE.bazel`, `.bazelrc`, `.bazelversion`, a host platform, and a hello-world that builds and tests on the host before any cross-compilation is attempted.
+Next: `M02`, the reproducible Debian trixie arm64 sysroot that replaces the interim one pinned here.

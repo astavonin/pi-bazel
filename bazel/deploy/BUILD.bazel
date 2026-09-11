@@ -1,0 +1,50 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+package(default_visibility = ["//visibility:private"])
+
+sh_test(
+    name = "device_smoke",
+    timeout = "short",
+    srcs = ["device_smoke.sh"],
+    data = [
+        "//src/hello",
+        "//src/hello:sentinel.txt",
+    ],
+    # The script is shell and drives ssh from the build host, so it must run
+    # on x86_64 even though its target platform is the aarch64 device.
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    # Its outcome depends on a live device outside the sandbox's declared
+    # inputs, so a cached result would be meaningless.
+    tags = [
+        "external",
+        "requires-network",
+    ],
+    target_compatible_with = ["@platforms//cpu:aarch64"],
+    deps = ["@rules_shell//shell/runfiles"],
+)
+
+# Host-only: drives device_smoke.sh with fake ssh/scp on PATH so every exit
+# path is exercised without a device, network, or Bazel test timeout risk.
+
+# In-build-graph substitute for device_smoke's deny-list: proves the same
+# invariant without a live device, so it runs on any --config=pi build/CI
+# runner. Uses the same exec/target split device_smoke already proves works.
+sh_test(
+    name = "cross_artifact_abi_check",
+    size = "small",
+    srcs = ["cross_artifact_abi_check.sh"],
+    args = ["$(rlocationpath @llvm_x64//:readelf)"],
+    data = [
+        "//src/hello",
+        "@llvm_x64//:readelf",
+    ],
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    target_compatible_with = ["@platforms//cpu:aarch64"],
+    deps = ["@rules_shell//shell/runfiles"],
+)

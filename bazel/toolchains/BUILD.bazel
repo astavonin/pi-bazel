@@ -1,0 +1,2 @@
+# Package marker: llvm_distribution.bzl is addressed by label, which requires
+# this directory to be a declared package even with no targets in it.

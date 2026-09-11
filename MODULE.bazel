@@ -1,0 +1,126 @@
+"""pi-bazel: cross-compiles from x86_64 Linux to a Raspberry Pi 5 (aarch64)."""
+
+module(name = "pi_bazel")
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_cc", version = "0.2.22")
+bazel_dep(name = "rules_shell", version = "0.8.0")
+bazel_dep(name = "toolchains_llvm", version = "1.9.0")
+
+# Single source for the version string llvm_distribution() and llvm.toolchain()
+# both need; a partial edit would desync the fetched tree from lib/clang/<major>
+# path resolution.
+_LLVM_VERSION = "23.1.0"
+
+# Test-toolchain resolution needs a registered execution platform matching the
+# target platform before it consults a target's exec_compatible_with, so :pi5
+# must be registered even though no action ever runs on aarch64 hardware.
+register_execution_platforms(
+    "//bazel/platforms:host",
+    "//bazel/platforms:pi5",
+)
+
+llvm_distribution = use_repo_rule(
+    "//bazel/toolchains:llvm_distribution.bzl",
+    "llvm_distribution",
+)
+
+# Exposes @llvm_distributions_data//:data.bzl's LLVM_DISTRIBUTIONS (sha256)
+# and LLVM_DISTRIBUTION_URLS maps, which llvm_distribution.bzl reads instead
+# of hand-parsing toolchains_llvm's own release table.
+llvm_distributions = use_extension("@toolchains_llvm//toolchain/extensions:distributions.bzl", "llvm_distributions")
+use_repo(llvm_distributions, "llvm_distributions_data")
+
+# The stock LLVM fetch is bypassed: llvm_distribution merges ICU 70 into the
+# tree so ld.lld can start on hosts shipping a different ICU.
+llvm_distribution(
+    name = "llvm_x64",
+    distribution = "Linux-X64",
+    llvm_version = _LLVM_VERSION,
+    overlay_lib_dir = "usr/local/lib",
+    overlay_libs = [
+        "libicui18n.so.70",
+        "libicuuc.so.70",
+        "libicudata.so.70",
+    ],
+    overlay_sha256 = "a8134e9f8a68d33600749601e143e553b5cb48c217c8941dbb9ef478fac420dd",
+    overlay_urls = ["https://github.com/unicode-org/icu/releases/download/release-70-1/icu4c-70_1-Ubuntu-20.04-x64.tgz"],
+)
+
+# Fetched only for its aarch64 libc++.a, libc++abi.a, libunwind.a and
+# compiler-rt builtins; nothing here executes, so it needs no ICU overlay.
+llvm_distribution(
+    name = "llvm_arm64",
+    distribution = "Linux-ARM64",
+    llvm_version = _LLVM_VERSION,
+)
+
+sysroot = use_repo_rule("@toolchains_llvm//toolchain:sysroot.bzl", "sysroot")
+
+# Interim: glibc 2.24, older than the 2.28 floor this project targets.
+sysroot(
+    name = "pi_sysroot",
+    sha256 = "e39b700d8858d18868544c8c84922f6adfa8419f3f42471b92024ba38eff7aca",
+    urls = ["https://commondatastorage.googleapis.com/chrome-linux-sysroot/toolchain/2202c161310ffde63729f29d27fe7bb24a0bc540/debian_stretch_arm64_sysroot.tar.xz"],
+)
+
+llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
+llvm.toolchain(
+    name = "llvm_host",
+    cxx_standard = {"": "c++23"},
+    llvm_version = _LLVM_VERSION,
+)
+llvm.toolchain_root(
+    name = "llvm_host",
+    label = "@llvm_x64//:BUILD",
+)
+
+# Both toolchains invoke the same exec-side ld.lld, so both need the ICU
+# libraries declared; omitting either leaves its links failing to load them.
+llvm.extra_linker_files(
+    name = "llvm_host",
+    label = "@llvm_x64//:icu_runtime",
+)
+use_repo(llvm, "llvm_host")
+
+register_toolchains("@llvm_host//:all")
+
+llvm.toolchain(
+    name = "llvm_pi",
+    cxx_standard = {"": "c++23"},
+    llvm_version = _LLVM_VERSION,
+    # Keyed to the aarch64 target rather than "": an empty key would also
+    # move the host toolchain off builtin-libc++.
+    stdlib = {"linux-aarch64": "libc++"},
+)
+llvm.toolchain_root(
+    name = "llvm_pi",
+    label = "@llvm_x64//:BUILD",
+)
+llvm.target_toolchain_root(
+    name = "llvm_pi",
+    label = "@llvm_arm64//:BUILD",
+    targets = ["linux-aarch64"],
+)
+llvm.sysroot(
+    name = "llvm_pi",
+    label = "@pi_sysroot//sysroot",
+    targets = ["linux-aarch64"],
+)
+llvm.extra_linker_files(
+    name = "llvm_pi",
+    label = "@llvm_x64//:icu_runtime",
+)
+
+# toolchains_llvm takes __config_site from the exec-side distribution, which
+# here is x86_64 and holds no aarch64 copy; without this the compile action
+# resolves the include path but never declares the file as an input.
+llvm.extra_compiler_files(
+    name = "llvm_pi",
+    label = "@llvm_arm64//:extra_config_site",
+    targets = ["linux-aarch64"],
+)
+use_repo(llvm, "llvm_pi")
+
+# Deliberately unregistered: build:pi selects this toolchain by label, so
+# resolution order never arbitrates between host and cross.

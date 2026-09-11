@@ -1,0 +1,34 @@
+# A pin that moved should error, not be silently rewritten on a plain build.
+common --lockfile_mode=error
+
+build:host --platforms=//bazel/platforms:host
+
+build:pi --platforms=//bazel/platforms:pi5
+build:pi --extra_toolchains=@llvm_pi//:cc-toolchain-aarch64-linux
+
+# @platforms has no cortex-a76 constraint value, so A76 tuning can only be a
+# compiler flag rather than a platform property.
+build:pi --copt=-mcpu=cortex-a76
+build:pi --copt=-mtune=cortex-a76
+
+# The libc++-only branch of the toolchain leaves these unset, unlike
+# builtin-libc++: AArch64 outline-atomics live in compiler-rt, and libunwind,
+# pthread and dl are otherwise supplied for free.
+build:pi --linkopt=-rtlib=compiler-rt
+build:pi --linkopt=-l:libunwind.a
+build:pi --linkopt=-lpthread
+build:pi --linkopt=-ldl
+
+# The device test reads the ssh alias from ~/.ssh/config, which a Bazel test
+# cannot see: the runner replaces HOME with $TEST_TMPDIR and strict action env
+# forwards nothing by default.
+test:pi --test_env=HOME
+test:pi --test_env=SSH_AUTH_SOCK
+test:pi --test_env=PI_SSH_HOST
+
+build:ci --check_direct_dependencies=error
+build:ci --repository_disable_download
+
+test --test_output=errors
+
+try-import %workspace%/user.bazelrc

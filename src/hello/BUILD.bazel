@@ -1,0 +1,41 @@
+load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
+load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
+
+package(default_visibility = ["//visibility:public"])
+
+# Single-sources the sentinel: bazel/deploy/device_smoke.sh reads sentinel.txt
+# directly via rlocation, so this header and the device script can never
+# disagree about the literal.
+genrule(
+    name = "sentinel_h",
+    srcs = ["sentinel.txt"],
+    outs = ["sentinel.h"],
+    cmd = """printf '#pragma once\n\n#include <string_view>\n\nnamespace hello {\n\ninline constexpr std::string_view kSentinel = "%s";\n\n}  // namespace hello\n' "$$(cat $(SRCS))" > $@""",
+)
+
+# Deliberately unconstrained: it builds under both configurations, and pinning
+# a CPU here would propagate incompatibility through device_smoke's data edge
+# and silently skip that test.
+cc_library(
+    name = "hello_lib",
+    srcs = ["hello.cc"],
+    hdrs = ["hello.h"],
+)
+
+cc_binary(
+    name = "hello",
+    srcs = [
+        "main.cc",
+        ":sentinel_h",
+    ],
+    deps = [":hello_lib"],
+)
+
+cc_test(
+    name = "hello_test",
+    size = "small",
+    srcs = ["hello_test.cc"],
+    target_compatible_with = ["@platforms//cpu:x86_64"],
+    deps = [":hello_lib"],
+)
