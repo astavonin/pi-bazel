@@ -1,0 +1,25 @@
+# Bazel
+/bazel-*
+/.bazel-cache/
+user.bazelrc
+
+# Sysroot build artifacts (large; published as release assets instead)
+/tools/sysroot/out/
+*.tar.zst
+*.tar.xz
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+tags
+
+# OS
+.DS_Store
+.directory
+
+# Build artifacts
+*.o
+*.so
+*.a
