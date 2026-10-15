@@ -65,32 +65,19 @@ sysroot(
 )
 
 llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
-llvm.toolchain(
-    name = "llvm_host",
-    cxx_standard = {"": "c++23"},
-    llvm_version = _LLVM_VERSION,
-)
-llvm.toolchain_root(
-    name = "llvm_host",
-    label = "@llvm_x64//:BUILD",
-)
 
-# Both toolchains invoke the same exec-side ld.lld, so both need the ICU
-# libraries declared; omitting either leaves its links failing to load them.
-llvm.extra_linker_files(
-    name = "llvm_host",
-    label = "@llvm_x64//:icu_runtime",
-)
-use_repo(llvm, "llvm_host")
-
-register_toolchains("@llvm_host//:all")
-
+# One toolchain repo serves both configs. Its generated set is a strict
+# superset of a host-only toolchain's: the same x86_64-linux, x86_64-none,
+# riscv32-none and riscv64-none targets, plus aarch64-linux. A second
+# host-only repo would contribute nothing but duplicate x86_64 candidates,
+# arbitrated by registration order rather than by anything declared.
 llvm.toolchain(
     name = "llvm_pi",
     cxx_standard = {"": "c++23"},
     llvm_version = _LLVM_VERSION,
-    # Keyed to the aarch64 target rather than "": an empty key would also
-    # move the host toolchain off builtin-libc++.
+    # Keyed to the aarch64 target rather than "" because this toolchain also
+    # serves host builds: an empty key would move them off builtin-libc++ too,
+    # with nothing in a --config=host command line pointing at the cause.
     stdlib = {"linux-aarch64": "libc++"},
 )
 llvm.toolchain_root(
@@ -107,6 +94,9 @@ llvm.sysroot(
     label = "@pi_sysroot//sysroot",
     targets = ["linux-aarch64"],
 )
+
+# Every link, host or cross, invokes the exec-side ld.lld, so the ICU
+# libraries must be declared or those links fail to load them.
 llvm.extra_linker_files(
     name = "llvm_pi",
     label = "@llvm_x64//:icu_runtime",
@@ -122,5 +112,7 @@ llvm.extra_compiler_files(
 )
 use_repo(llvm, "llvm_pi")
 
-# Deliberately unregistered: build:pi selects this toolchain by label, so
-# resolution order never arbitrates between host and cross.
+# Registered globally rather than selected by label under build:pi. Nothing
+# arbitrates: aarch64-linux is the only candidate for //bazel/platforms:pi5,
+# x86_64-linux the only one for :host.
+register_toolchains("@llvm_pi//:all")

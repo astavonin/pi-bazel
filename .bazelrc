@@ -4,7 +4,6 @@ common --lockfile_mode=error
 build:host --platforms=//bazel/platforms:host
 
 build:pi --platforms=//bazel/platforms:pi5
-build:pi --extra_toolchains=@llvm_pi//:cc-toolchain-aarch64-linux
 
 # @platforms has no cortex-a76 constraint value, so A76 tuning can only be a
 # compiler flag rather than a platform property.
