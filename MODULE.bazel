@@ -74,6 +74,25 @@ llvm = use_extension("@toolchains_llvm//toolchain/extensions:llvm.bzl", "llvm")
 llvm.toolchain(
     name = "llvm_pi",
     cxx_standard = {"": "c++23"},
+    # @platforms has no cortex-a76 constraint value, so A76 tuning can only be a
+    # compiler flag rather than a platform property. Keyed to the target pair
+    # rather than set under build:pi, so the tuning follows the toolchain: a
+    # plain --platforms=//bazel/platforms:pi5 build gets it too.
+    extra_compile_flags = {"linux-aarch64": [
+        "-mcpu=cortex-a76",
+        "-mtune=cortex-a76",
+    ]},
+    # The libc++ stdlib branch emits only -l:libc++.a -l:libc++abi.a, unlike
+    # builtin-libc++: AArch64 outline-atomics live in compiler-rt, and libunwind,
+    # pthread and dl are otherwise supplied for free. extra_link_flags appends to
+    # the toolchain's own link_flags, so these land before the object files,
+    # where builtin-libc++ puts them on the host.
+    extra_link_flags = {"linux-aarch64": [
+        "-rtlib=compiler-rt",
+        "-l:libunwind.a",
+        "-lpthread",
+        "-ldl",
+    ]},
     llvm_version = _LLVM_VERSION,
     # Keyed to the aarch64 target rather than "" because this toolchain also
     # serves host builds: an empty key would move them off builtin-libc++ too,

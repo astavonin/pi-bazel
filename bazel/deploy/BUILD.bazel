@@ -10,6 +10,15 @@ sh_test(
         "//src/hello",
         "//src/hello:sentinel.txt",
     ],
+    # The script reads the ssh alias from ~/.ssh/config, which a Bazel test
+    # cannot see: the runner replaces HOME with $TEST_TMPDIR and strict action
+    # env forwards nothing by default. Declared here rather than as test:pi
+    # --test_env, so only the test that drives ssh asks for them.
+    env_inherit = [
+        "HOME",
+        "PI_SSH_HOST",
+        "SSH_AUTH_SOCK",
+    ],
     # The script is shell and drives ssh from the build host, so it must run
     # on x86_64 even though its target platform is the aarch64 device.
     exec_compatible_with = [
